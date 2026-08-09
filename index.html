@@ -331,26 +331,17 @@ input,select{font:inherit}
     document.head.appendChild(l);
     const a=document.createElement('link');a.rel='apple-touch-icon';a.href=icon;document.head.appendChild(a);
   }catch(e){}
-})();
-
-/* ═══════════════════════════════════════════════════════════
-   Storage adapter
-
-   ▸ ON GITHUB PAGES: swap the two branches for localStorage,
-     and add an IndexedDB store keyed by S.docKey to cache the
-     generated MP3 blobs so you only pay for each document once.
-   ═══════════════════════════════════════════════════════════ */
 const Store={
-  _mem:{},
   async get(k){
-    if(window.storage){ try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}catch(e){return null;} }
-    return k in this._mem?this._mem[k]:null;
+    try{ const v=localStorage.getItem('cadence:'+k); return v?JSON.parse(v):null; }
+    catch(e){ return null; }
   },
   async set(k,v){
-    if(window.storage){ try{await window.storage.set(k,JSON.stringify(v));return true;}catch(e){} }
-    this._mem[k]=v;return true;
+    try{ localStorage.setItem('cadence:'+k,JSON.stringify(v)); return true; }
+    catch(e){ return false; }
   }
 };
+
 
 /* ── provider table (rates in USD per 1M characters) ────── */
 const PROVIDERS={
