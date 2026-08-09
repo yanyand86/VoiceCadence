@@ -53,7 +53,7 @@ input,select{font:inherit}
 .formats{display:flex;flex-wrap:wrap;gap:7px;justify-content:center}
 .fmt{font-family:var(--mono);font-weight:300;font-size:10px;letter-spacing:.1em;
   padding:6px 10px;border:1px solid var(--rule);border-radius:99px;color:var(--paper-dim)}
-.open-btn{background:var(--lamp);color:#1A1206;font-weight:600;font-size:16px;padding:15px 30px;
+.open-btn{display:inline-block;text-align:center;background:var(--lamp);color:#1A1206;font-weight:600;font-size:16px;padding:15px 30px;
   border-radius:99px;letter-spacing:-.01em;box-shadow:0 6px 0 var(--lamp-dim);
   transition:transform .08s ease,box-shadow .08s ease}
 .open-btn:active{transform:translateY(3px);box-shadow:0 3px 0 var(--lamp-dim)}
@@ -69,7 +69,7 @@ input,select{font:inherit}
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .docmeta{font-family:var(--mono);font-weight:300;font-size:9.5px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--paper-dim);margin:5px 0 0}
-.chip{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+.chip{display:inline-block;text-align:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
   border:1px solid var(--rule);border-radius:99px;padding:8px 11px;color:var(--paper-dim);flex-shrink:0}
 .chip:active{background:var(--panel-2)}
 
@@ -190,7 +190,7 @@ input,select{font:inherit}
       <span class="fmt">PDF</span><span class="fmt">DOCX</span>
       <span class="fmt">EPUB</span><span class="fmt">TXT · MD</span>
     </div>
-    <button class="open-btn" id="openBtn">Choose a file</button>
+    <label class="open-btn" for="fileInput" id="openBtn" role="button" tabindex="0">Choose a file</label>
     <p class="dz-note">Text is read on this device. Audio is only generated if you ask for it.</p>
   </section>
 
@@ -206,7 +206,7 @@ input,select{font:inherit}
         <p class="docmeta" id="docMeta">—</p>
       </div>
       <button class="chip" id="gearBtn" aria-label="Audio settings">Set&nbsp;up</button>
-      <button class="chip" id="swapBtn">Change</button>
+      <label class="chip" for="fileInput" id="swapBtn" role="button" tabindex="0">Change</label>
     </div>
 
     <div class="modes" role="tablist">
@@ -318,6 +318,12 @@ input,select{font:inherit}
 <script>
 'use strict';
 
+/* Any script error is shown on screen instead of failing silently. */
+window.addEventListener('error',e=>{
+  const t=document.getElementById('toast');
+  if(t){t.textContent='Error: '+e.message+' (line '+(e.lineno||'?')+')';t.className='toast up bad';}
+});
+
 /* ── installability ─────────────────────────────────────── */
 (function(){
   const icon='data:image/svg+xml,'+encodeURIComponent(
@@ -331,17 +337,26 @@ input,select{font:inherit}
     document.head.appendChild(l);
     const a=document.createElement('link');a.rel='apple-touch-icon';a.href=icon;document.head.appendChild(a);
   }catch(e){}
+})();
+
+/* ═══════════════════════════════════════════════════════════
+   Storage adapter
+
+   ▸ ON GITHUB PAGES: swap the two branches for localStorage,
+     and add an IndexedDB store keyed by S.docKey to cache the
+     generated MP3 blobs so you only pay for each document once.
+   ═══════════════════════════════════════════════════════════ */
 const Store={
+  _mem:{},
   async get(k){
-    try{ const v=localStorage.getItem('cadence:'+k); return v?JSON.parse(v):null; }
-    catch(e){ return null; }
+    if(window.storage){ try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}catch(e){return null;} }
+    return k in this._mem?this._mem[k]:null;
   },
   async set(k,v){
-    try{ localStorage.setItem('cadence:'+k,JSON.stringify(v)); return true; }
-    catch(e){ return false; }
+    if(window.storage){ try{await window.storage.set(k,JSON.stringify(v));return true;}catch(e){} }
+    this._mem[k]=v;return true;
   }
 };
-
 
 /* ── provider table (rates in USD per 1M characters) ────── */
 const PROVIDERS={
@@ -997,8 +1012,6 @@ el.gearBtn.addEventListener('click',openSheet);
 /* ═══════════════════════════════════════════════════════════
    Wiring
    ═══════════════════════════════════════════════════════════ */
-el.openBtn.addEventListener('click',()=>el.fileInput.click());
-el.swapBtn.addEventListener('click',()=>el.fileInput.click());
 el.fileInput.addEventListener('change',e=>{const f=e.target.files&&e.target.files[0];el.fileInput.value='';loadFile(f);});
 
 ['dragover','dragenter'].forEach(ev=>el.dropzone.addEventListener(ev,e=>{e.preventDefault();el.dropzone.classList.add('is-over');}));
