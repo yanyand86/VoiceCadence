@@ -197,6 +197,7 @@ input,select{font:inherit}
   <section class="loading hidden" id="loading">
     <div class="reel"></div>
     <p id="loadingMsg">Reading the file</p>
+    <button class="ghost" id="cancelBtn" style="max-width:190px;margin-top:4px">Cancel</button>
   </section>
 
   <section class="player hidden" id="player">
@@ -340,16 +341,17 @@ window.addEventListener('error',e=>{
 })();
 
 /* ═══════════════════════════════════════════════════════════
+   Storage adapter
+
+   ▸ ON GITHUB PAGES: swap the two branches for localStorage,
+     and add an IndexedDB store keyed by S.docKey to cache the
+     generated MP3 blobs so you only pay for each document once.
+   ═══════════════════════════════════════════════════════════ */
 const Store={
+  _mem:{},
   async get(k){
-    try{ const v=localStorage.getItem('cadence:'+k); return v?JSON.parse(v):null; }
-    catch(e){ return null; }
-  },
-  async set(k,v){
-    try{ localStorage.setItem('cadence:'+k,JSON.stringify(v)); return true; }
-    catch(e){ return false; }
-  }
-};
+    if(window.storage){ try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}catch(e){return null;} }
+    return k in this._mem?this._mem[k]:null;
   },
   async set(k,v){
     if(window.storage){ try{await window.storage.set(k,JSON.stringify(v));return true;}catch(e){} }
@@ -394,7 +396,7 @@ const USD_TO_GBP=0.78;   // rough — adjust if it drifts
 /* ── elements ───────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const el={};
-['dropzone','loading','loadingMsg','player','openBtn','fileInput','swapBtn','gearBtn','docTitle','docMeta',
+['dropzone','loading','loadingMsg','cancelBtn','player','openBtn','fileInput','swapBtn','gearBtn','docTitle','docMeta',
  'pane','rail','lamp','tElapsed','tTotal','place','playBtn','playIcon','backBtn','fwdBtn','rateBtn','rateVal',
  'voiceSel','voiceCtl','wakeBtn','wakeVal','toast','eyebrow','modeLive','modeFile','makePanel','qChars','qLen',
  'qVoice','qCost','makeNote','genBar','genFill','genBtn','dlBtn','sheet','provSel','provHint','keyField','keyIn',
@@ -453,9 +455,44 @@ function hash(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(
 /* ═══════════════════════════════════════════════════════════
    Extractors — unchanged from the reading-only build
    ═══════════════════════════════════════════════════════════ */
+function needLib(ok,name){
+  if(!ok)throw new Error(`The ${name} reader script didn\u2019t load. The CDN is blocked or unreachable from here.`);
+}
+function withTimeout(p,ms,msg){
+  let t;
+  const guard=new Promise((_,rej)=>{t=setTimeout(()=>rej(new Error(msg)),ms);});
+  return Promise.race([p,guard]).finally(()=>clearTimeout(t));
+}
+/* A Worker cannot be created from another origin, so pdf.js silently falls back
+   to the main thread and can stall. Fetch the worker and serve it from a blob
+   on this origin instead. */
+let workerReady=null;
+function ensurePdfWorker(){
+  if(workerReady)return workerReady;
+  const url='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  workerReady=(async()=>{
+    try{
+      const r=await withTimeout(fetch(url),15000,'worker fetch timed out');
+      if(!r.ok)throw new Error('bad status');
+      const src=await r.text();
+      pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
+    }catch(e){
+      pdfjsLib.GlobalWorkerOptions.workerSrc=url;
+    }
+  })();
+  return workerReady;
+}
+
 async function fromPDF(file){
-  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  needLib(typeof pdfjsLib!=='undefined','PDF');
+  el.loadingMsg.textContent='Starting the PDF reader';
+  await ensurePdfWorker();
+  const data=await file.arrayBuffer();
+  el.loadingMsg.textContent='Opening the PDF';
+  const task=pdfjsLib.getDocument({data});
+  task.onProgress=pr=>{ if(pr&&pr.total)el.loadingMsg.textContent=`Opening the PDF ${Math.round(pr.loaded/pr.total*100)}%`; };
+  const pdf=await withTimeout(task.promise,60000,
+    'The PDF reader stopped responding. The file may be very large, encrypted, or damaged.');
   let title='';
   try{const md=await pdf.getMetadata();title=(md.info&&md.info.Title||'').trim();}catch(e){}
   const paras=[];
@@ -490,10 +527,12 @@ async function fromPDF(file){
   return{title:title||stripExt(file.name),paras,kind:'PDF'};
 }
 async function fromDOCX(file){
+  needLib(typeof mammoth!=='undefined','Word');
   const r=await mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()});
   return{title:stripExt(file.name),paras:r.value.split(/\n+/).map(s=>s.trim()).filter(s=>s.length>1),kind:'Word'};
 }
 async function fromEPUB(file){
+  needLib(typeof JSZip!=='undefined','EPUB');
   const zip=await JSZip.loadAsync(file);
   const cf=zip.file('META-INF/container.xml');
   if(!cf)throw new Error('That EPUB is missing its container file.');
@@ -537,8 +576,10 @@ async function fromText(file){
 /* ═══════════════════════════════════════════════════════════
    Load
    ═══════════════════════════════════════════════════════════ */
+let loadToken=0;
 async function loadFile(file){
   if(!file)return;
+  const my=++loadToken;
   stopAll(); releaseAudio();
   show('load'); el.loadingMsg.textContent='Reading the file';
   const ext=(file.name.split('.').pop()||'').toLowerCase();
@@ -550,9 +591,11 @@ async function loadFile(file){
     else if(ext==='doc')throw new Error('Old .doc files aren\u2019t readable here. Save it as .docx first.');
     else doc=await fromText(file);
   }catch(err){
+    if(my!==loadToken)return;
     console.error(err); show(S.paras.length?'play':'drop');
     toast(err.message||'That file couldn\u2019t be read.',true); return;
   }
+  if(my!==loadToken)return;
   if(!doc.paras.length){
     show(S.paras.length?'play':'drop');
     toast(ext==='pdf'?'No selectable text in that PDF \u2014 it\u2019s probably a scan.':'No readable text in that file.',true);
@@ -1007,6 +1050,7 @@ el.sheetDone.addEventListener('click',async()=>{
 });
 el.sheet.addEventListener('click',e=>{ if(e.target===el.sheet)closeSheet(); });
 el.gearBtn.addEventListener('click',openSheet);
+el.cancelBtn.addEventListener('click',()=>{loadToken++;show(S.paras.length?'play':'drop');});
 
 /* ═══════════════════════════════════════════════════════════
    Wiring
